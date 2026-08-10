@@ -3,6 +3,7 @@ import Marquee from "react-fast-marquee";
 import { ArrowRight, Instagram } from "lucide-react";
 import { CONTACT } from "../lib/api";
 import { Reveal } from "../components/Reveal";
+import StudioFilm from "../components/StudioFilm";
 
 const process = [
   ["Reference", "It begins with a photograph that carries meaning — a glance, a moment, a person."],
@@ -36,6 +37,8 @@ export default function About() {
           <span className="font-serif italic text-4xl md:text-6xl text-[#c9c5bc] mx-10">·</span>
         </Marquee>
       </section>
+
+      <StudioFilm />
 
       <section className="px-6 md:px-10 py-24 max-w-[1100px] mx-auto">
         <Reveal><p className="label">The Process</p><h2 className="font-serif font-light text-4xl md:text-5xl mt-3 mb-14">The making of a portrait</h2></Reveal>

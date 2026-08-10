@@ -24,6 +24,9 @@ export default function ArtworkCard({ art, index = 0 }) {
     >
       <div className="relative overflow-hidden bg-[#EAE7E1]">
         <div className="img-fallback-wrap relative">
+          {art.availability === "Sold" && (
+            <span className="absolute top-3 left-3 z-10 bg-[#171614]/85 text-[#C8B58C] px-3 py-1.5 backdrop-blur-sm" style={{ fontFamily: "Marcellus, serif", textTransform: "uppercase", letterSpacing: "0.2em", fontSize: "0.58rem" }}>Acquired</span>
+          )}
           <img
             src={art.main_image}
             alt={art.alt || art.title}

@@ -20,7 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr
 
-from seed_data import ARTWORKS, PRICING, TESTIMONIALS, JOURNAL, SETTINGS
+from seed_data import ARTWORKS, PRICING, TESTIMONIALS, JOURNAL, SETTINGS, PRINT_EDITIONS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rosh")
@@ -305,6 +305,72 @@ async def create_enquiry(body: Enquiry, request: Request):
     return {"status": "success", "id": eid, "email_sent": email_ok}
 
 
+# ---------- prints & print orders ----------
+@api.get("/prints")
+async def list_prints():
+    items = await db.print_editions.find({"active": True}, {"_id": 0}).to_list(200)
+    items.sort(key=lambda x: x.get("order", 999))
+    return items
+
+class PrintOrder(BaseModel):
+    edition_id: str
+    edition_title: str = ""
+    size: str = ""
+    quantity: int = 1
+    framing: str = "Unframed"
+    name: str
+    email: EmailStr
+    phone: str = ""
+    address: str = ""
+    notes: str = ""
+    consent: bool = False
+    honeypot: str = ""
+
+@api.post("/print-orders")
+async def create_print_order(body: PrintOrder):
+    if body.honeypot:
+        return {"status": "success", "id": "ignored"}
+    if not body.consent:
+        raise HTTPException(400, "Please accept the privacy policy to continue.")
+    ed = await db.print_editions.find_one({"id": body.edition_id}, {"_id": 0})
+    unit = ed.get("price") if ed else None
+    total = (unit * body.quantity) if unit else None
+    oid = str(uuid.uuid4())
+    doc = body.model_dump(); doc.pop("honeypot", None)
+    doc.update({"id": oid, "status": "New", "unit_price": unit, "total": total,
+                "created_at": datetime.now(timezone.utc).isoformat()})
+    await db.print_orders.insert_one({**doc})
+
+    def money(n): return ("\u20B9" + f"{n:,}") if n else "On confirmation"
+    admin_html = f"""<div style="font-family:Arial,sans-serif;color:#1c1c1a">
+    <h2 style="font-weight:normal">New print order — Rosh Charcoal</h2>
+    <table cellpadding="6" style="border-collapse:collapse">
+    <tr><td><b>Print</b></td><td>{body.edition_title} ({body.size})</td></tr>
+    <tr><td><b>Quantity</b></td><td>{body.quantity}</td></tr>
+    <tr><td><b>Framing</b></td><td>{body.framing}</td></tr>
+    <tr><td><b>Unit price</b></td><td>{money(unit)}</td></tr>
+    <tr><td><b>Estimated total</b></td><td>{money(total)}</td></tr>
+    <tr><td><b>Name</b></td><td>{body.name}</td></tr>
+    <tr><td><b>Email</b></td><td>{body.email}</td></tr>
+    <tr><td><b>Phone</b></td><td>{body.phone}</td></tr>
+    <tr><td><b>Shipping address</b></td><td>{body.address}</td></tr>
+    </table><p><b>Notes:</b><br>{body.notes}</p></div>"""
+    customer_html = f"""<div style="font-family:Arial,sans-serif;color:#1c1c1a;max-width:520px">
+    <h2 style="font-weight:normal">Your print order request is received.</h2>
+    <p>Dear {body.name},</p>
+    <p>Thank you for ordering <b>{body.edition_title}</b> ({body.size}) × {body.quantity}. Rosh Charcoal will confirm availability, the final total, and payment details by email shortly.</p>
+    <p style="color:#73736e">— Rosh Charcoal<br>roshcharcoal@gmail.com · +91 9035615236</p></div>"""
+    email_ok = True
+    try:
+        await send_email(OWNER_EMAIL, f"New print order from {body.name}", admin_html, reply_to=body.email)
+        await send_email(body.email, "Your print order — Rosh Charcoal", customer_html)
+    except Exception as e:
+        email_ok = False
+        logger.error(f"print order email failed {oid}: {e}")
+        await db.print_orders.update_one({"id": oid}, {"$set": {"email_failed": True}})
+    return {"status": "success", "id": oid, "total": total, "email_sent": email_ok}
+
+
 # ---------- admin ----------
 @api.get("/admin/enquiries")
 async def admin_enquiries(admin=Depends(get_admin)):
@@ -323,6 +389,47 @@ class SettingsUpdate(BaseModel):
 @api.put("/admin/settings")
 async def update_settings(body: SettingsUpdate, admin=Depends(get_admin)):
     await db.settings.update_one({"key": "site"}, {"$set": {"value": body.value}}, upsert=True)
+    return {"ok": True}
+
+# --- admin: print editions manager ---
+@api.get("/admin/prints")
+async def admin_list_prints(admin=Depends(get_admin)):
+    items = await db.print_editions.find({}, {"_id": 0}).to_list(200)
+    items.sort(key=lambda x: x.get("order", 999))
+    return items
+
+class PrintEdition(BaseModel):
+    id: str = None
+    title: str
+    size: str = ""
+    edition: str = ""
+    paper: str = ""
+    price: int | None = None
+    image: str = ""
+    order: int = 99
+    active: bool = True
+
+@api.post("/admin/prints")
+async def admin_create_print(body: PrintEdition, admin=Depends(get_admin)):
+    doc = body.model_dump()
+    doc["id"] = doc.get("id") or str(uuid.uuid4())
+    await db.print_editions.update_one({"id": doc["id"]}, {"$set": doc}, upsert=True)
+    return {"ok": True, "id": doc["id"]}
+
+@api.delete("/admin/prints/{pid}")
+async def admin_delete_print(pid: str, admin=Depends(get_admin)):
+    await db.print_editions.delete_one({"id": pid})
+    return {"ok": True}
+
+@api.get("/admin/print-orders")
+async def admin_print_orders(admin=Depends(get_admin)):
+    items = await db.print_orders.find({}, {"_id": 0}).to_list(1000)
+    items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return items
+
+@api.patch("/admin/print-orders/{oid}")
+async def admin_update_print_order(oid: str, body: dict, admin=Depends(get_admin)):
+    await db.print_orders.update_one({"id": oid}, {"$set": {"status": body.get("status", "New")}})
     return {"ok": True}
 
 @api.get("/")
@@ -354,6 +461,8 @@ async def startup():
         await db.testimonials.insert_many([{**t} for t in TESTIMONIALS])
     if await db.journal.count_documents({}) == 0:
         await db.journal.insert_many([{**j, "status": "published"} for j in JOURNAL])
+    if await db.print_editions.count_documents({}) == 0:
+        await db.print_editions.insert_many([{**p} for p in PRINT_EDITIONS])
     if await db.settings.find_one({"key": "site"}) is None:
         await db.settings.insert_one({"key": "site", "value": SETTINGS})
     try:

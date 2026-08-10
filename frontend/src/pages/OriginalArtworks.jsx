@@ -29,8 +29,11 @@ export default function OriginalArtworks() {
         {works.map((art, i) => (
           <Reveal key={art.slug} delay={0.04}>
             <article className={`grid md:grid-cols-2 gap-10 md:gap-16 items-center ${i % 2 ? "md:[direction:rtl]" : ""}`}>
-              <Link to={`/artwork/${art.slug}`} className="group block [direction:ltr] overflow-hidden bg-[#ECE8E1]">
-                <img src={art.main_image} alt={art.alt || art.title} loading="lazy" className="w-full h-auto object-cover transition-transform duration-[1.2s] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]" />
+              <Link to={`/artwork/${art.slug}`} className="group block [direction:ltr] relative overflow-hidden bg-[#ECE8E1]">
+                {art.availability === "Sold" && (
+                  <span data-testid={`acquired-${art.slug}`} className="absolute top-5 left-5 z-10 bg-[#171614]/85 text-[#F6F3EE] label !text-[0.6rem] !text-[#C8B58C] px-4 py-2 backdrop-blur-sm">Acquired</span>
+                )}
+                <img src={art.main_image} alt={art.alt || art.title} loading="lazy" className={`w-full h-auto object-cover transition-transform duration-[1.2s] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03] ${art.availability === "Sold" ? "grayscale-[0.15]" : ""}`} />
               </Link>
               <div className="[direction:ltr]">
                 <div className="flex items-center gap-4">

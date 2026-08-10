@@ -220,6 +220,13 @@ JOURNAL = [
     },
 ]
 
+PRINT_EDITIONS = [
+    {"id": "study-a5", "title": "Study Print — A5", "size": "15 × 21 cm", "edition": "Open edition", "paper": "310gsm cotton rag, giclée", "price": 1800, "image": "https://images.pexels.com/photos/7608653/pexels-photo-7608653.jpeg?auto=compress&cs=tinysrgb&w=1000", "order": 1, "active": True},
+    {"id": "portrait-a4", "title": "Portrait Print — A4", "size": "21 × 29 cm", "edition": "Limited to 50", "paper": "310gsm cotton rag, giclée", "price": 3200, "image": "https://images.unsplash.com/photo-1593472807861-5bb884af28f6?crop=entropy&cs=srgb&fm=jpg&q=85&w=1000", "order": 2, "active": True},
+    {"id": "statement-a3", "title": "Statement Print — A3", "size": "30 × 42 cm", "edition": "Limited to 25", "paper": "Hahnemühle museum etching", "price": 5400, "image": "https://images.unsplash.com/photo-1612641605722-60c66c66530c?crop=entropy&cs=srgb&fm=jpg&q=85&w=1000", "order": 3, "active": True},
+    {"id": "collector-a2", "title": "Collector Print — A2", "size": "42 × 59 cm", "edition": "Limited to 15, signed", "paper": "Hahnemühle museum etching", "price": 8900, "image": "https://images.unsplash.com/photo-1748200099986-5ed2ca9ae4a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=1000", "order": 4, "active": True},
+]
+
 SETTINGS = {
     "commission_status": "Commissions Open",
     "response_time": "I usually respond to enquiries within 2–3 working days.",
