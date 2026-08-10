@@ -1,0 +1,21 @@
+{
+  "version": 3,
+  "services": [
+    {
+      "name": "frontend",
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build"
+      }
+    },
+    {
+      "name": "backend",
+      "src": "backend/server.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
+    }
+  ]
+}
