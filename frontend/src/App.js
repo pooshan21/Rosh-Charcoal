@@ -1,53 +1,58 @@
-import { useEffect } from "react";
-import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { Toaster } from "sonner";
+import SmoothScroll from "./components/SmoothScroll";
+import Header from "./components/Header";
+import Footer from "./components/Footer";
+import Home from "./pages/Home";
+import Gallery from "./pages/Gallery";
+import ArtworkDetail from "./pages/ArtworkDetail";
+import Pricing from "./pages/Pricing";
+import Commissions from "./pages/Commissions";
+import About from "./pages/About";
+import Contact from "./pages/Contact";
+import Journal from "./pages/Journal";
+import JournalArticle from "./pages/JournalArticle";
+import Prints from "./pages/Prints";
+import OriginalArtworks from "./pages/OriginalArtworks";
+import Legal from "./pages/Legal";
+import NotFound from "./pages/NotFound";
+import AdminLogin from "./pages/AdminLogin";
+import AdminDashboard from "./pages/AdminDashboard";
+import "./App.css";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+const Site = ({ children }) => (
+  <>
+    <Header />
+    <main>{children}</main>
+    <Footer />
+  </>
+);
 
 function App() {
   return (
-    <div className="App">
+    <div className="App grain">
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
+        <SmoothScroll>
+          <Toaster position="bottom-right" theme="light" />
+          <Routes>
+            <Route path="/" element={<Site><Home /></Site>} />
+            <Route path="/gallery" element={<Site><Gallery /></Site>} />
+            <Route path="/artwork/:slug" element={<Site><ArtworkDetail /></Site>} />
+            <Route path="/pricing" element={<Site><Pricing /></Site>} />
+            <Route path="/prints" element={<Site><Prints /></Site>} />
+            <Route path="/original-artworks" element={<Site><OriginalArtworks /></Site>} />
+            <Route path="/commissions" element={<Site><Commissions /></Site>} />
+            <Route path="/about" element={<Site><About /></Site>} />
+            <Route path="/contact" element={<Site><Contact /></Site>} />
+            <Route path="/journal" element={<Site><Journal /></Site>} />
+            <Route path="/journal/:slug" element={<Site><JournalArticle /></Site>} />
+            <Route path="/privacy" element={<Site><Legal kind="privacy" /></Site>} />
+            <Route path="/terms" element={<Site><Legal kind="terms" /></Site>} />
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="*" element={<Site><NotFound /></Site>} />
+          </Routes>
+        </SmoothScroll>
       </BrowserRouter>
     </div>
   );
