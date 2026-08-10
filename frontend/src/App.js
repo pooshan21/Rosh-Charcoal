@@ -14,6 +14,7 @@ import Journal from "./pages/Journal";
 import JournalArticle from "./pages/JournalArticle";
 import Prints from "./pages/Prints";
 import OriginalArtworks from "./pages/OriginalArtworks";
+import OrderStatus from "./pages/OrderStatus";
 import Legal from "./pages/Legal";
 import NotFound from "./pages/NotFound";
 import AdminLogin from "./pages/AdminLogin";
@@ -41,6 +42,8 @@ function App() {
             <Route path="/pricing" element={<Site><Pricing /></Site>} />
             <Route path="/prints" element={<Site><Prints /></Site>} />
             <Route path="/original-artworks" element={<Site><OriginalArtworks /></Site>} />
+            <Route path="/order" element={<Site><OrderStatus /></Site>} />
+            <Route path="/order/:orderNumber" element={<Site><OrderStatus /></Site>} />
             <Route path="/commissions" element={<Site><Commissions /></Site>} />
             <Route path="/about" element={<Site><About /></Site>} />
             <Route path="/contact" element={<Site><Contact /></Site>} />

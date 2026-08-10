@@ -14,6 +14,9 @@ import bcrypt
 import jwt
 import httpx
 import requests
+import razorpay
+import hmac
+import hashlib
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, Header, Query
 from starlette.responses import Response as StarletteResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -44,6 +47,13 @@ STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 APP_NAME = "roshcharcoal"
 _storage_key = None
+
+# Razorpay (payment inactive until keys are added to .env)
+RAZORPAY_KEY_ID = (os.environ.get("RAZORPAY_KEY_ID") or "").strip()
+RAZORPAY_KEY_SECRET = (os.environ.get("RAZORPAY_KEY_SECRET") or "").strip()
+PAYMENTS_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
+rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if PAYMENTS_ENABLED else None
+SHIPPING_FEE = 300
 
 def init_storage(force=False):
     global _storage_key
@@ -84,6 +94,8 @@ async def get_admin(request: Request):
         ah = request.headers.get("Authorization", "")
         if ah.startswith("Bearer "):
             token = ah[7:]
+    if not token:
+        token = request.query_params.get("token")
     if not token:
         raise HTTPException(401, "Not authenticated")
     try:
@@ -306,69 +318,137 @@ async def create_enquiry(body: Enquiry, request: Request):
 
 
 # ---------- prints & print orders ----------
+def _print_public(ed):
+    rt = ed.get("run_total")
+    sold = ed.get("sold", 0) or 0
+    remaining = (rt - sold) if rt is not None else None
+    return {**ed, "remaining": remaining, "sold_out": (remaining is not None and remaining <= 0)}
+
 @api.get("/prints")
 async def list_prints():
     items = await db.print_editions.find({"active": True}, {"_id": 0}).to_list(200)
     items.sort(key=lambda x: x.get("order", 999))
-    return items
+    return [_print_public(e) for e in items]
 
-class PrintOrder(BaseModel):
-    edition_id: str
-    edition_title: str = ""
-    size: str = ""
-    quantity: int = 1
-    framing: str = "Unframed"
+@api.get("/payments/config")
+async def payments_config():
+    return {"enabled": PAYMENTS_ENABLED, "key_id": RAZORPAY_KEY_ID if PAYMENTS_ENABLED else ""}
+
+class Customer(BaseModel):
     name: str
     email: EmailStr
     phone: str = ""
     address: str = ""
-    notes: str = ""
+
+class CheckoutReq(BaseModel):
+    edition_id: str
+    quantity: int = 1
+    framing: str = "Unframed"
+    customer: Customer
     consent: bool = False
     honeypot: str = ""
 
-@api.post("/print-orders")
-async def create_print_order(body: PrintOrder):
+def _order_number():
+    return "RC-" + uuid.uuid4().hex[:6].upper()
+
+@api.post("/checkout/create-order")
+async def create_checkout(body: CheckoutReq):
     if body.honeypot:
-        return {"status": "success", "id": "ignored"}
+        return {"status": "ignored"}
     if not body.consent:
         raise HTTPException(400, "Please accept the privacy policy to continue.")
     ed = await db.print_editions.find_one({"id": body.edition_id}, {"_id": 0})
-    unit = ed.get("price") if ed else None
-    total = (unit * body.quantity) if unit else None
-    oid = str(uuid.uuid4())
-    doc = body.model_dump(); doc.pop("honeypot", None)
-    doc.update({"id": oid, "status": "New", "unit_price": unit, "total": total,
-                "created_at": datetime.now(timezone.utc).isoformat()})
-    await db.print_orders.insert_one({**doc})
-
-    def money(n): return ("\u20B9" + f"{n:,}") if n else "On confirmation"
-    admin_html = f"""<div style="font-family:Arial,sans-serif;color:#1c1c1a">
-    <h2 style="font-weight:normal">New print order — Rosh Charcoal</h2>
-    <table cellpadding="6" style="border-collapse:collapse">
-    <tr><td><b>Print</b></td><td>{body.edition_title} ({body.size})</td></tr>
-    <tr><td><b>Quantity</b></td><td>{body.quantity}</td></tr>
-    <tr><td><b>Framing</b></td><td>{body.framing}</td></tr>
-    <tr><td><b>Unit price</b></td><td>{money(unit)}</td></tr>
-    <tr><td><b>Estimated total</b></td><td>{money(total)}</td></tr>
-    <tr><td><b>Name</b></td><td>{body.name}</td></tr>
-    <tr><td><b>Email</b></td><td>{body.email}</td></tr>
-    <tr><td><b>Phone</b></td><td>{body.phone}</td></tr>
-    <tr><td><b>Shipping address</b></td><td>{body.address}</td></tr>
-    </table><p><b>Notes:</b><br>{body.notes}</p></div>"""
-    customer_html = f"""<div style="font-family:Arial,sans-serif;color:#1c1c1a;max-width:520px">
-    <h2 style="font-weight:normal">Your print order request is received.</h2>
-    <p>Dear {body.name},</p>
-    <p>Thank you for ordering <b>{body.edition_title}</b> ({body.size}) × {body.quantity}. Rosh Charcoal will confirm availability, the final total, and payment details by email shortly.</p>
-    <p style="color:#73736e">— Rosh Charcoal<br>roshcharcoal@gmail.com · +91 9035615236</p></div>"""
-    email_ok = True
+    if not ed or not ed.get("active"):
+        raise HTTPException(404, "Print not available.")
+    pub = _print_public(ed)
+    qty = max(1, int(body.quantity))
+    if pub["remaining"] is not None and qty > pub["remaining"]:
+        raise HTTPException(409, "Not enough stock remaining for this edition.")
+    unit = ed.get("price") or 0
+    subtotal = unit * qty
+    total = subtotal + SHIPPING_FEE
+    onum = _order_number()
+    now = datetime.now(timezone.utc)
+    order = {
+        "id": str(uuid.uuid4()), "order_number": onum,
+        "edition_id": ed["id"], "edition_title": ed["title"], "size": ed.get("size", ""),
+        "image": ed.get("image", ""), "edition_label": ed.get("edition", ""),
+        "quantity": qty, "framing": body.framing,
+        "unit_price": unit, "subtotal": subtotal, "shipping": SHIPPING_FEE, "tax": 0, "total": total,
+        "customer": body.customer.model_dump(),
+        "payment_status": "pending", "payment_method": "",
+        "razorpay_order_id": "", "razorpay_payment_id": "",
+        "status": "Order Placed",
+        "estimated_delivery": (now + timedelta(days=14)).date().isoformat(),
+        "tracking_url": "",
+        "created_at": now.isoformat(),
+    }
+    resp = {"order_number": onum, "amount": total, "payments_enabled": PAYMENTS_ENABLED}
+    if PAYMENTS_ENABLED:
+        rzp_order = rzp_client.order.create({"amount": total * 100, "currency": "INR",
+                                             "receipt": onum, "payment_capture": 1})
+        order["razorpay_order_id"] = rzp_order["id"]
+        resp.update({"razorpay_order_id": rzp_order["id"], "key_id": RAZORPAY_KEY_ID})
+    await db.orders.insert_one(order)
+    # Notify owner of the new order (email best-effort)
     try:
-        await send_email(OWNER_EMAIL, f"New print order from {body.name}", admin_html, reply_to=body.email)
-        await send_email(body.email, "Your print order — Rosh Charcoal", customer_html)
+        await send_email(OWNER_EMAIL, f"New print order {onum}",
+                         f"<p>New order <b>{onum}</b> — {ed['title']} × {qty} — \u20B9{total:,} ({'awaiting payment' if not PAYMENTS_ENABLED else 'payment in progress'}).</p>",
+                         reply_to=body.customer.email)
     except Exception as e:
-        email_ok = False
-        logger.error(f"print order email failed {oid}: {e}")
-        await db.print_orders.update_one({"id": oid}, {"$set": {"email_failed": True}})
-    return {"status": "success", "id": oid, "total": total, "email_sent": email_ok}
+        logger.error(f"owner order email failed: {e}")
+    return resp
+
+class VerifyReq(BaseModel):
+    order_number: str
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+@api.post("/checkout/verify")
+async def verify_checkout(body: VerifyReq):
+    order = await db.orders.find_one({"order_number": body.order_number})
+    if not order:
+        raise HTTPException(404, "Order not found.")
+    expected = hmac.new(RAZORPAY_KEY_SECRET.encode(),
+                        f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(),
+                        hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, body.razorpay_signature):
+        await db.orders.update_one({"order_number": body.order_number}, {"$set": {"payment_status": "failed"}})
+        raise HTTPException(400, "Payment verification failed.")
+    # fetch method
+    method = "Card / UPI"
+    try:
+        pay = rzp_client.payment.fetch(body.razorpay_payment_id)
+        method = (pay.get("method") or "").upper() or method
+    except Exception:
+        pass
+    # decrement stock atomically only for limited editions
+    dec = await db.print_editions.find_one_and_update(
+        {"id": order["edition_id"], "$or": [{"run_total": None},
+         {"$expr": {"$lte": [{"$add": ["$sold", order["quantity"]]}, "$run_total"]}}]},
+        {"$inc": {"sold": order["quantity"]}})
+    await db.orders.update_one({"order_number": body.order_number}, {"$set": {
+        "payment_status": "paid", "payment_method": method,
+        "razorpay_payment_id": body.razorpay_payment_id, "status": "Confirmed"}})
+    try:
+        await send_email(order["customer"]["email"], f"Payment received — order {order['order_number']} — Rosh Charcoal",
+                         f"<div style='font-family:Arial;color:#171614;max-width:520px'><h2 style='font-weight:normal'>Thank you — your order is confirmed.</h2><p>Order <b>{order['order_number']}</b>: {order['edition_title']} × {order['quantity']} — \u20B9{order['total']:,} paid.</p><p>Track your order anytime at your order page.</p><p style='color:#73736e'>— Rosh Charcoal</p></div>")
+    except Exception as e:
+        logger.error(f"customer receipt email failed: {e}")
+    return {"status": "paid", "order_number": body.order_number}
+
+def _order_public(o):
+    o.pop("_id", None)
+    o.get("customer", {}).pop("address", None)
+    return o
+
+@api.get("/orders/{order_number}")
+async def get_order(order_number: str):
+    o = await db.orders.find_one({"order_number": order_number.upper()})
+    if not o:
+        raise HTTPException(404, "Order not found.")
+    return _order_public(o)
 
 
 # ---------- admin ----------
@@ -408,6 +488,8 @@ class PrintEdition(BaseModel):
     image: str = ""
     order: int = 99
     active: bool = True
+    run_total: int | None = None
+    sold: int = 0
 
 @api.post("/admin/prints")
 async def admin_create_print(body: PrintEdition, admin=Depends(get_admin)):
@@ -421,15 +503,16 @@ async def admin_delete_print(pid: str, admin=Depends(get_admin)):
     await db.print_editions.delete_one({"id": pid})
     return {"ok": True}
 
-@api.get("/admin/print-orders")
-async def admin_print_orders(admin=Depends(get_admin)):
-    items = await db.print_orders.find({}, {"_id": 0}).to_list(1000)
+@api.get("/admin/orders")
+async def admin_orders(admin=Depends(get_admin)):
+    items = await db.orders.find({}, {"_id": 0}).to_list(1000)
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return items
 
-@api.patch("/admin/print-orders/{oid}")
-async def admin_update_print_order(oid: str, body: dict, admin=Depends(get_admin)):
-    await db.print_orders.update_one({"id": oid}, {"$set": {"status": body.get("status", "New")}})
+@api.patch("/admin/orders/{order_number}")
+async def admin_update_order(order_number: str, body: dict, admin=Depends(get_admin)):
+    allowed = {k: body[k] for k in ("status", "tracking_url", "estimated_delivery", "payment_status") if k in body}
+    await db.orders.update_one({"order_number": order_number.upper()}, {"$set": allowed})
     return {"ok": True}
 
 @api.get("/")
@@ -463,6 +546,12 @@ async def startup():
         await db.journal.insert_many([{**j, "status": "published"} for j in JOURNAL])
     if await db.print_editions.count_documents({}) == 0:
         await db.print_editions.insert_many([{**p} for p in PRINT_EDITIONS])
+    else:
+        # migrate stock fields onto pre-existing editions
+        for p in PRINT_EDITIONS:
+            ex = await db.print_editions.find_one({"id": p["id"]})
+            if ex is not None and "run_total" not in ex:
+                await db.print_editions.update_one({"id": p["id"]}, {"$set": {"run_total": p["run_total"], "sold": p["sold"]}})
     if await db.settings.find_one({"key": "site"}) is None:
         await db.settings.insert_one({"key": "site", "value": SETTINGS})
     try:

@@ -12,7 +12,8 @@ export default function AdminLogin() {
   const submit = async (e) => {
     e.preventDefault(); setErr(""); setBusy(true);
     try {
-      await client.post("/auth/login", { email, password });
+      const { data } = await client.post("/auth/login", { email, password });
+      if (data.token) localStorage.setItem("rc_token", data.token);
       nav("/admin");
     } catch (e) {
       setErr(e.response?.data?.detail || "Login failed");

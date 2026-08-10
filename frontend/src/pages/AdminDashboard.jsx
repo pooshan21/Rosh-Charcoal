@@ -5,9 +5,9 @@ import { Trash2, Plus } from "lucide-react";
 import { client, rupee } from "../lib/api";
 
 const STATUSES = ["New", "Contacted", "Quoted", "Confirmed", "In Progress", "Completed", "Declined"];
-const ORDER_STATUSES = ["New", "Confirmed", "Paid", "Shipped", "Delivered", "Cancelled"];
+const ORDER_STATUSES = ["Order Placed", "Confirmed", "Packed", "Shipped", "Delivered", "Cancelled"];
 const BACKEND = process.env.REACT_APP_BACKEND_URL;
-const blankEdition = { id: "", title: "", size: "", edition: "", paper: "", price: "", image: "", order: 99, active: true };
+const blankEdition = { id: "", title: "", size: "", edition: "", paper: "", price: "", image: "", order: 99, active: true, run_total: "", sold: 0 };
 
 export default function AdminDashboard() {
   const [auth, setAuth] = useState(null);
@@ -22,7 +22,7 @@ export default function AdminDashboard() {
   const loadAll = () => {
     client.get("/admin/enquiries").then((r) => setEnquiries(r.data)).catch(() => {});
     client.get("/admin/prints").then((r) => setEditions(r.data)).catch(() => {});
-    client.get("/admin/print-orders").then((r) => setOrders(r.data)).catch(() => {});
+    client.get("/admin/orders").then((r) => setOrders(r.data)).catch(() => {});
   };
   useEffect(() => {
     client.get("/auth/me").then(() => { setAuth(true); loadAll(); }).catch(() => { setAuth(false); nav("/admin/login"); });
@@ -33,13 +33,22 @@ export default function AdminDashboard() {
     setEnquiries((p) => p.map((e) => (e.id === id ? { ...e, status } : e)));
     if (sel?.id === id) setSel((s) => ({ ...s, status }));
   };
-  const setOrderStatus = async (id, status) => {
-    await client.patch(`/admin/print-orders/${id}`, { status });
-    setOrders((p) => p.map((o) => (o.id === id ? { ...o, status } : o)));
+  const setOrderStatus = async (onum, status) => {
+    await client.patch(`/admin/orders/${onum}`, { status });
+    setOrders((p) => p.map((o) => (o.order_number === onum ? { ...o, status } : o)));
+  };
+  const setTracking = async (onum, tracking_url) => {
+    await client.patch(`/admin/orders/${onum}`, { tracking_url });
+    setOrders((p) => p.map((o) => (o.order_number === onum ? { ...o, tracking_url } : o)));
+    toast.success("Tracking link saved");
   };
   const saveEdition = async (e) => {
     e.preventDefault();
-    const payload = { ...editing, price: editing.price === "" ? null : Number(editing.price), order: Number(editing.order) || 99 };
+    const payload = { ...editing,
+      price: editing.price === "" ? null : Number(editing.price),
+      order: Number(editing.order) || 99,
+      run_total: editing.run_total === "" || editing.run_total == null ? null : Number(editing.run_total),
+      sold: Number(editing.sold) || 0 };
     await client.post("/admin/prints", payload);
     toast.success("Print edition saved");
     setEditing(null);
@@ -50,7 +59,7 @@ export default function AdminDashboard() {
     await client.delete(`/admin/prints/${id}`);
     setEditions((p) => p.filter((x) => x.id !== id));
   };
-  const logout = async () => { await client.post("/auth/logout"); nav("/admin/login"); };
+  const logout = async () => { localStorage.removeItem("rc_token"); await client.post("/auth/logout").catch(() => {}); nav("/admin/login"); };
 
   if (auth === null) return <div className="min-h-screen flex items-center justify-center text-[#74726B]">Loading…</div>;
 
@@ -95,7 +104,7 @@ export default function AdminDashboard() {
                     {sel.reference_files?.length > 0 && (
                       <div className="mt-4 border-t border-[#e0dbd1] pt-4">
                         <p className="label mb-2">Reference files</p>
-                        {sel.reference_files.map((f, i) => <a key={i} href={`${BACKEND}/api/files/${f.path}`} target="_blank" rel="noreferrer" className="link-underline text-sm block">{f.filename}</a>)}
+                        {sel.reference_files.map((f, i) => <a key={i} href={`${BACKEND}/api/files/${f.path}?token=${localStorage.getItem("rc_token")}`} target="_blank" rel="noreferrer" className="link-underline text-sm block">{f.filename}</a>)}
                       </div>
                     )}
                     <div className="mt-6 border-t border-[#e0dbd1] pt-4">
@@ -150,6 +159,10 @@ export default function AdminDashboard() {
                       <input type="number" className="paper-input" placeholder="Price ₹ (blank = on request)" value={editing.price} onChange={(e) => setEditing({ ...editing, price: e.target.value })} />
                       <input type="number" className="paper-input" placeholder="Sort order" value={editing.order} onChange={(e) => setEditing({ ...editing, order: e.target.value })} />
                     </div>
+                    <div className="grid grid-cols-2 gap-5">
+                      <input type="number" className="paper-input" placeholder="Edition run total (blank = open)" value={editing.run_total ?? ""} onChange={(e) => setEditing({ ...editing, run_total: e.target.value })} />
+                      <input type="number" className="paper-input" placeholder="Sold so far" value={editing.sold ?? 0} onChange={(e) => setEditing({ ...editing, sold: e.target.value })} />
+                    </div>
                     <input className="paper-input" placeholder="Image URL" value={editing.image} onChange={(e) => setEditing({ ...editing, image: e.target.value })} />
                     <label className="flex gap-3 items-center text-sm"><input type="checkbox" checked={editing.active} onChange={(e) => setEditing({ ...editing, active: e.target.checked })} /> Visible on the Prints page</label>
                   </div>
@@ -170,21 +183,29 @@ export default function AdminDashboard() {
             {orders.length === 0 ? <p className="text-[#74726B] py-16">No print orders yet.</p> : (
               <div className="space-y-4">
                 {orders.map((o) => (
-                  <div key={o.id} className="border border-[#e0dbd1] p-5">
+                  <div key={o.order_number} className="border border-[#e0dbd1] p-5" data-testid={`admin-order-${o.order_number}`}>
                     <div className="flex flex-wrap justify-between gap-4">
                       <div>
-                        <h3 className="font-serif text-xl">{o.edition_title} <span className="text-sm text-[#74726B]">× {o.quantity} · {o.framing}</span></h3>
-                        <p className="text-sm text-[#74726B] mt-1">{o.name} · {o.email} · {o.phone}</p>
-                        {o.address && <p className="text-sm text-[#74726B]">{o.address}</p>}
-                        {o.notes && <p className="text-sm text-[#4a4a46] mt-2 italic">{o.notes}</p>}
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono-label !text-[0.7rem] !text-[#171614]">{o.order_number}</span>
+                          <span className={`px-2 py-0.5 text-[0.6rem] uppercase tracking-wider ${o.payment_status === "paid" ? "bg-[#2f4a37] text-[#F6F3EE]" : "bg-[#ECE8E1] text-[#8a6d3d]"}`}>{o.payment_status}</span>
+                        </div>
+                        <h3 className="font-serif text-xl mt-1">{o.edition_title} <span className="text-sm text-[#74726B]">× {o.quantity} · {o.framing}</span></h3>
+                        <p className="text-sm text-[#74726B] mt-1">{o.customer?.name} · {o.customer?.email} · {o.customer?.phone}</p>
+                        {o.customer?.address && <p className="text-sm text-[#74726B]">{o.customer.address}</p>}
                       </div>
                       <div className="text-right">
-                        <p className="font-serif text-2xl">{o.total != null ? rupee(o.total) : "On confirmation"}</p>
+                        <p className="font-serif text-2xl">{rupee(o.total)}</p>
                         <p className="font-mono-label !text-[0.6rem] mt-1">{new Date(o.created_at).toLocaleString()}</p>
+                        {o.payment_method && <p className="text-xs text-[#74726B]">{o.payment_method}</p>}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2 mt-4 border-t border-[#e0dbd1] pt-4">
-                      {ORDER_STATUSES.map((s) => <button key={s} onClick={() => setOrderStatus(o.id, s)} className={`text-xs px-3 py-1.5 border ${o.status === s ? "bg-[#171614] text-[#F6F3EE] border-[#171614]" : "border-[#d3cec4] hover:border-[#171614]"}`}>{s}</button>)}
+                      {ORDER_STATUSES.map((s) => <button key={s} onClick={() => setOrderStatus(o.order_number, s)} className={`text-xs px-3 py-1.5 border ${o.status === s ? "bg-[#171614] text-[#F6F3EE] border-[#171614]" : "border-[#d3cec4] hover:border-[#171614]"}`}>{s}</button>)}
+                    </div>
+                    <div className="flex gap-3 mt-3 items-center">
+                      <input defaultValue={o.tracking_url} placeholder="Courier tracking URL" className="paper-input !py-1.5 text-sm flex-1" onBlur={(e) => e.target.value !== o.tracking_url && setTracking(o.order_number, e.target.value)} />
+                      <a href={`/order/${o.order_number}`} target="_blank" rel="noreferrer" className="link-underline text-sm whitespace-nowrap">View page →</a>
                     </div>
                   </div>
                 ))}
